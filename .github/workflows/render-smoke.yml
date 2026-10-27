@@ -1,0 +1,91 @@
+name: Render container smoke test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".dockerignore"
+      - "deploy/render/**"
+      - "mini-services/cs16-server/**"
+      - ".github/workflows/render-smoke.yml"
+  pull_request:
+    paths:
+      - ".dockerignore"
+      - "deploy/render/**"
+      - "mini-services/cs16-server/**"
+      - ".github/workflows/render-smoke.yml"
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Build pinned Render image
+        run: docker build --tag cs16-render-smoke --file deploy/render/Dockerfile .
+
+      - name: Start bridge and HLDS
+        run: |
+          docker run --detach --name cs16-render-smoke \
+            --publish 10000:10000 \
+            --env PORT=10000 \
+            --env BRIDGE_ALLOWED_ORIGINS=https://allowed.example \
+            --env HLDS_RCON_PASSWORD=AbC+/xyz== \
+            cs16-render-smoke
+
+      - name: Wait for healthy HLDS
+        run: |
+          for attempt in $(seq 1 120); do
+            if curl --fail --silent http://127.0.0.1:10000/health | grep --quiet '"hlds":true'; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs cs16-render-smoke
+          exit 1
+
+      - name: Run in-container smoke assertions
+        run: |
+          docker cp deploy/render/smoke.ts cs16-render-smoke:/tmp/render-smoke.ts
+          docker exec cs16-render-smoke bun /tmp/render-smoke.ts
+
+      - name: Verify unhealthy bridge returns HTTP 503
+        run: |
+          docker run --detach --name cs16-render-unhealthy \
+            --publish 10001:10000 \
+            --env PORT=10000 \
+            --env NODE_ENV=production \
+            --env BRIDGE_ALLOWED_ORIGINS=https://allowed.example \
+            --env HLDS_DIR=/missing-hlds \
+            cs16-render-smoke bun /app/bridge/index.ts
+          for attempt in $(seq 1 30); do
+            status="$(curl --silent --output /tmp/unhealthy-health.json --write-out '%{http_code}' http://127.0.0.1:10001/health || true)"
+            if [ "$status" = 503 ]; then
+              grep --quiet '"hlds":false' /tmp/unhealthy-health.json
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs cs16-render-unhealthy
+          exit 1
+
+      - name: Verify container restart recovery
+        run: |
+          docker restart cs16-render-smoke
+          for attempt in $(seq 1 120); do
+            if curl --fail --silent http://127.0.0.1:10000/health | grep --quiet '"hlds":true'; then
+              docker exec cs16-render-smoke bun /tmp/render-smoke.ts
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs cs16-render-smoke
+          exit 1
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          docker logs cs16-render-smoke || true
+          docker logs cs16-render-unhealthy || true

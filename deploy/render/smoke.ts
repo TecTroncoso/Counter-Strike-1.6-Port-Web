@@ -182,8 +182,9 @@ async function main(): Promise<void> {
 
   const game = await rcon("meta game");
   assert(
-    /regamedll/i.test(game),
-    `RCON meta game does not identify ReGameDLL: ${game}`,
+    /desc:\s+cs\.so\s+\(override\)/i.test(game) &&
+      /dll file:\s+cs\.so/i.test(game),
+    `RCON meta game does not identify the ReGameDLL cs.so override: ${game}`,
   );
 
   const plugins = await rcon("meta list");

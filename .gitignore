@@ -15,6 +15,7 @@ node_modules
 
 # next.js
 /.next/
+/.open-next/
 /out/
 
 # production
@@ -51,6 +52,9 @@ test
 prompt
 
 server.log
+# Local OpenNext/Wrangler output
+/.wrangler/
+/.wrangler-dry-run/
 # Skills directory
 /skills/
 # CS 1.6 big binary assets (Tailwind scanner must ignore)

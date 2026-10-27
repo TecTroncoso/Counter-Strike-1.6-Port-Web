@@ -10,6 +10,9 @@ export const metadata: Metadata = {
   description:
     "Port web del Counter-Strike 1.6 real: motor Xash3D (compatible GoldSrc) compilado a WebAssembly, lógica de juego open-source (cs16-client + ReGameDLL) y bots YaPB. Juega con bots o multijugador.",
   keywords: ["Counter-Strike 1.6", "Xash3D", "WebAssembly", "GoldSrc", "FPS", "web port", "bots", "multijugador"],
+  icons: {
+    icon: "/logo.svg",
+  },
 };
 
 export const viewport: Viewport = {

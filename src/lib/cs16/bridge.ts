@@ -14,16 +14,24 @@ export function bridgeBaseUrl(): string {
   return ""; // same-origin
 }
 
-/** Absolute URL for bridge HTTP endpoints (health, logs). */
+/** Absolute URL for the bridge health endpoint. */
 export function bridgeHttpUrl(pathAndQuery: string): string {
-  return `${bridgeBaseUrl()}${pathAndQuery}`;
+  const base = bridgeBaseUrl();
+  if (base) {
+    // NEXT_PUBLIC_CS16_BRIDGE_URL is normally a wss:// URL because the game
+    // tunnel is WebSocket-only. HTTP probes must use the corresponding origin.
+    const httpBase = base.replace(/^wss:/i, "https:").replace(/^ws:/i, "http:");
+    return `${httpBase}${pathAndQuery}`;
+  }
+  const separator = pathAndQuery.includes("?") ? "&" : "?";
+  return `${pathAndQuery}${separator}XTransformPort=3010`;
 }
 
 /** WebSocket URL for the game tunnel. */
 export function bridgeWsUrl(): string {
   const base = bridgeBaseUrl();
   if (base) {
-    return base.replace(/^http/, "ws");
+    return base.replace(/^https:/i, "wss:").replace(/^http:/i, "ws:");
   }
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${proto}//${window.location.host}/?XTransformPort=3010`;

@@ -3,8 +3,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { bootGame, friendlyBootError, type EngineHandle } from "@/lib/cs16/engine";
 import { bridgeHttpUrl } from "@/lib/cs16/bridge";
-import { MAPS } from "@/lib/cs16/loader";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 
@@ -14,6 +12,9 @@ interface ServerStatus {
   hlds: boolean;
   clients: number;
   uptimeSec: number;
+  map: string;
+  bots: number;
+  maxPlayers: number;
 }
 
 const CONTROLS: { keys: string; action: string }[] = [
@@ -34,8 +35,6 @@ const CONTROLS: { keys: string; action: string }[] = [
 export default function Cs16Page() {
   const [screen, setScreen] = useState<Screen>("menu");
   const [nickname, setNickname] = useState("Player");
-  const [map, setMap] = useState("de_dust2");
-  const [bots, setBots] = useState("9");
   const [progress, setProgress] = useState(0);
   const [progressLabel, setProgressLabel] = useState("");
   const [bootLogs, setBootLogs] = useState<string[]>([]);
@@ -60,10 +59,8 @@ export default function Cs16Page() {
     try {
       const raw = localStorage.getItem("cs16.settings");
       if (raw) {
-        const s = JSON.parse(raw) as Partial<{ nickname: string; map: string; bots: string }>;
+        const s = JSON.parse(raw) as Partial<{ nickname: string }>;
         if (s.nickname) setNickname(s.nickname);
-        if (s.map) setMap(s.map);
-        if (s.bots) setBots(s.bots);
       }
     } catch {}
     setSettingsLoaded(true);
@@ -73,9 +70,9 @@ export default function Cs16Page() {
   useEffect(() => {
     if (!settingsLoaded) return;
     try {
-      localStorage.setItem("cs16.settings", JSON.stringify({ nickname, map, bots }));
+      localStorage.setItem("cs16.settings", JSON.stringify({ nickname }));
     } catch {}
-  }, [settingsLoaded, nickname, map, bots]);
+  }, [settingsLoaded, nickname]);
 
   const pushLog = useCallback((line: string) => {
     console.log("[cs16-engine]", line);
@@ -88,7 +85,7 @@ export default function Cs16Page() {
     let alive = true;
     const check = async () => {
       try {
-        const res = await fetch(bridgeHttpUrl("/health?XTransformPort=3010"), { cache: "no-store" });
+        const res = await fetch(bridgeHttpUrl("/health"), { cache: "no-store" });
         if (!res.ok) throw new Error(String(res.status));
         const data = (await res.json()) as ServerStatus;
         if (alive) setServerStatus(data);
@@ -322,8 +319,6 @@ export default function Cs16Page() {
           canvas,
           mode: "multiplayer",
           nickname,
-          map,
-          bots: Number(bots) || 0,
           onProgress: (pct, label) => {
             setProgress(pct);
             setProgressLabel(label);
@@ -344,7 +339,7 @@ export default function Cs16Page() {
         setScreen("menu");
       }
     },
-    [bots, map, nickname, pushLog],
+    [nickname, pushLog],
   );
 
   // Auto-restart once after a "Reintentar" reload (flag is consumed here).
@@ -398,7 +393,7 @@ export default function Cs16Page() {
   const serverBadge = serverStatus?.hlds ? (
     <span className="inline-flex items-center gap-2 text-[#8fd18f]">
       <span className="h-2 w-2 rounded-full bg-[#8fd18f] shadow-[0_0_8px_#8fd18f]" />
-      Servidor HLDS online {serverStatus.clients > 0 ? `· ${serverStatus.clients} jugador(es)` : "· 9 bots jugando"}
+      Servidor HLDS online {serverStatus.clients > 0 ? `· ${serverStatus.clients} jugador(es)` : `· ${serverStatus.bots} bots jugando`}
     </span>
   ) : (
     <span className="inline-flex items-center gap-2 text-[#d18f8f]">
@@ -605,50 +600,20 @@ export default function Cs16Page() {
                 </div>
 
                 <div className="space-y-4">
-                  <div>
-                    <label className="mb-1 block font-mono text-[11px] uppercase tracking-wider text-[#8a877f]">
-                      Mapa del servidor (se aplica al entrar vía rcon)
-                    </label>
-                    <Select value={map} onValueChange={setMap}>
-                      <SelectTrigger className="w-full border-[#3a3d38] bg-[#191b18] font-mono text-sm">
-                        <SelectValue placeholder="Elegir mapa" />
-                      </SelectTrigger>
-                      <SelectContent className="max-h-72 border-[#3a3d38] bg-[#191b18] font-mono">
-                        {MAPS.map((m) => (
-                          <SelectItem key={m.id} value={m.id} className="text-sm">
-                            {m.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <label className="mb-1 block font-mono text-[11px] uppercase tracking-wider text-[#8a877f]">
-                      Bots en el servidor (YaPB vía metamod)
-                    </label>
-                    <Select value={bots} onValueChange={setBots}>
-                      <SelectTrigger className="w-full border-[#3a3d38] bg-[#191b18] font-mono text-sm">
-                        <SelectValue placeholder="Número de bots" />
-                      </SelectTrigger>
-                      <SelectContent className="border-[#3a3d38] bg-[#191b18] font-mono">
-                        {["0", "3", "5", "7", "9", "11"].map((n) => (
-                          <SelectItem key={n} value={n} className="text-sm">
-                            {n} bots
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
                   <div className="rounded border border-[#2e312c] bg-[#191b18] p-3 font-mono text-xs leading-relaxed text-[#b5b0a4]">
-                    <p className="text-[#e8c07a]">▸ {serverStatus?.hlds ? "hlserver:27015 — de_dust2 en curso" : "esperando servidor..."}</p>
+                    <p className="text-[#e8c07a]">
+                      ▸ {serverStatus?.hlds
+                        ? `hlserver:27015 — ${serverStatus.map} en curso`
+                        : "esperando servidor..."}
+                    </p>
                     {serverStatus && (
                       <p className="mt-1 text-[#7f7a70]">
-                        uptime: {Math.floor(serverStatus.uptimeSec / 60)} min · clientes: {serverStatus.clients}
+                        uptime: {Math.floor(serverStatus.uptimeSec / 60)} min · clientes: {serverStatus.clients} · bots: {serverStatus.bots} · máximo: {serverStatus.maxPlayers}
                       </p>
                     )}
                   </div>
                   <p className="font-mono text-[11px] leading-relaxed text-[#7f7a70]">
-                    Te unes a un servidor dedicado HLDS real (32-bit bajo emulación) con rondas clásicas de
+                    Te unes a un servidor dedicado HLDS real de 32 bits con rondas clásicas de
                     bomba/rehén. Abre esta página en otra pestaña o dispositivo para jugar juntos.
                   </p>
                 </div>

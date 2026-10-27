@@ -27,8 +27,6 @@ export interface BootOptions {
   canvas: HTMLCanvasElement;
   mode: GameMode;
   nickname: string;
-  map: string;
-  bots: number;
   onProgress: (pct: number, label: string) => void;
   onLog: (line: string) => void;
 }
@@ -220,21 +218,6 @@ export async function bootGame(opts: BootOptions): Promise<EngineHandle> {
   };
   const pumpTimer = setInterval(pumpConsole, 800);
 
-  // Retry wrapper for post-join commands (the first ccalls can throw while
-  // the runtime settles, so retry briefly before giving up).
-  const runCmd = async (cmd: string, retries = 5): Promise<boolean> => {
-    for (let i = 0; i < retries; i++) {
-      try {
-        engine.Cmd_ExecuteString(cmd);
-        return true;
-      } catch {
-        await new Promise((r) => setTimeout(r, 1200));
-      }
-    }
-    onLog(`no se pudo ejecutar: ${cmd}`);
-    return false;
-  };
-
   // ---- Mouse look plumbing -------------------------------------------------
   // The emscripten SDL2 backend only delivers movementX/Y deltas while
   // mouse->relative_mode is on (pre-2.24 SDL keys the handler off this flag;
@@ -298,7 +281,7 @@ export async function bootGame(opts: BootOptions): Promise<EngineHandle> {
   setTimeout(() => {
     void (async () => {
       const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-      const healthUrl = bridgeHttpUrl("/health?XTransformPort=3010");
+      const healthUrl = bridgeHttpUrl("/health");
       let lastPacketsIn = -1;
       const readPacketsIn = async (): Promise<number> => {
         try {
@@ -440,21 +423,8 @@ export async function bootGame(opts: BootOptions): Promise<EngineHandle> {
           onLog("no se confirmó la conexión (¿está el servidor caído?)");
         }
 
-        // 3) Server-side adjustments via rcon (map choice + bot quota).
-        const waitJoined = async (ms: number) => {
-          if (joined) await sleep(ms);
-        };
-        await waitJoined(8000);
-        await runCmd("rcon_password csweb123");
-        if (opts.map && opts.map !== "de_dust2") {
-          await sleep(1500);
-          await runCmd(`rcon changelevel ${opts.map}`);
-          onLog(`cambiando mapa del servidor a ${opts.map}...`);
-        }
-        if (opts.bots > 0) {
-          await sleep(1500);
-          await runCmd(`rcon yb_quota ${opts.bots}`);
-        }
+        // The map and bot quota are controlled by the server deployment. The
+        // browser is deliberately not allowed to issue privileged RCON commands.
       } catch (e) {
         onLog(`error enviando comandos: ${String(e)}`);
       }

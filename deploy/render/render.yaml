@@ -1,0 +1,33 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+# Deploy from the repo root: Render → New → Blueprint → point at this repo.
+# Or via dashboard: New Web Service → Docker → dockerfilePath deploy/render/Dockerfile
+#
+# ⚠️ The Docker build context is the repo ROOT because the image embeds
+#    hlds-ns-root (~1 GB of real CS 1.6 server files). Keep the repo
+#    (or the connected Git mirror) complete.
+
+services:
+  - type: web
+    name: cs16-hlds-bridge
+    runtime: docker
+    dockerfilePath: ./deploy/render/Dockerfile
+    dockerContext: ./
+    # plan: free  → se duerme tras 15 min sin tráfico; cron-job.org lo mantiene
+    #                despierto (ver DEPLOY.md §4). 512 MB, 0.5 CPU: justos pero
+    #                jugables con bots.
+    # plan: starter ($7/mes) → siempre encendido, sin depender del cron.
+    plan: free
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: HLDS_DIR
+        value: /app/hlds-ns-root/opt/steam/hlds
+      - key: HLDS_LOG_FILE
+        value: /tmp/hlds-supervised.log
+      - key: HLDS_MAP
+        value: de_dust2
+      - key: HLDS_MAXPLAYERS
+        value: "16"
+      # QEMU vacío ⇒ HLDS nativo 32-bit sobre x86_64 (Render es x86_64).
+      - key: QEMU
+        value: ""

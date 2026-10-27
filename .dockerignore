@@ -1,0 +1,6 @@
+# keep the Docker build context small: the image only needs these two trees
+# (see deploy/render/Dockerfile). Everything else is ignored.
+*
+!hlds-ns-root
+!mini-services
+!package.json

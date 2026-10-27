@@ -59,11 +59,11 @@ RUN set -eux; \
       /app/cstrike/addons/amxmodx \
       /app/cstrike/addons/jk_botti; \
     sed -i -E 's#^gamedll_linux[[:space:]].*#gamedll_linux "addons/metamod/dlls/metamod.so"#' /app/cstrike/liblist.gam; \
-    cat > /app/cstrike/addons/metamod/config.ini <<'EOF'
-gamedll dlls/cs.so
-plugins_file addons/metamod/plugins.ini
-exec_cfg addons/metamod/exec.cfg
-EOF
+    printf '%s\n' \
+      'gamedll dlls/cs.so' \
+      'plugins_file addons/metamod/plugins.ini' \
+      'exec_cfg addons/metamod/exec.cfg' \
+      > /app/cstrike/addons/metamod/config.ini; \
     printf '%s\n' 'linux addons/yapb/bin/yapb.so' > /app/cstrike/addons/metamod/plugins.ini; \
     chmod 0755 /app/cstrike/addons/metamod/dlls/metamod.so /app/cstrike/addons/yapb/bin/yapb.so; \
     rm -f /app/cstrike/addons/metamod/dlls/trace_mm.so; \

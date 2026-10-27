@@ -176,10 +176,8 @@ async function main(): Promise<void> {
     `RCON status does not contain map ${expectedMap}: ${status}`,
   );
   assert(
-    new RegExp(`maxplayers\\s*[:=]\\s*${expectedMaxPlayers}\\b`, "i").test(
-      status,
-    ),
-    `RCON status does not contain maxplayers ${expectedMaxPlayers}: ${status}`,
+    new RegExp(`\\(\\s*${expectedMaxPlayers}\\s+max\\s*\\)`, "i").test(status),
+    `RCON status does not contain ${expectedMaxPlayers} max players: ${status}`,
   );
 
   const game = await rcon("meta game");

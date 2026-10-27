@@ -1,10 +1,6 @@
 # Render Blueprint — https://render.com/docs/blueprint-spec
-# Deploy from the repo root: Render → New → Blueprint → point at this repo.
-# Or via dashboard: New Web Service → Docker → dockerfilePath deploy/render/Dockerfile
-#
-# ⚠️ The Docker build context is the repo ROOT because the image embeds
-#    hlds-ns-root (~1 GB of real CS 1.6 server files). Keep the repo
-#    (or the connected Git mirror) complete.
+# In Render's Blueprint setup, select "deploy/render/render.yaml" as the
+# Blueprint Path. The Dockerfile path below is relative to the repository root.
 
 services:
   - type: web
@@ -12,22 +8,33 @@ services:
     runtime: docker
     dockerfilePath: ./deploy/render/Dockerfile
     dockerContext: ./
-    # plan: free  → se duerme tras 15 min sin tráfico; cron-job.org lo mantiene
-    #                despierto (ver DEPLOY.md §4). 512 MB, 0.5 CPU: justos pero
-    #                jugables con bots.
-    # plan: starter ($7/mes) → siempre encendido, sin depender del cron.
-    plan: free
+    # Starter keeps the game server resident. The Free plan sleeps after idle
+    # and is not suitable for a production multiplayer server.
+    plan: starter
     healthCheckPath: /health
     autoDeploy: true
     envVars:
       - key: HLDS_DIR
-        value: /app/hlds-ns-root/opt/steam/hlds
+        value: /app
+      - key: HLDS_GAME_DIR
+        value: /app/cstrike
       - key: HLDS_LOG_FILE
         value: /tmp/hlds-supervised.log
       - key: HLDS_MAP
         value: de_dust2
       - key: HLDS_MAXPLAYERS
         value: "16"
-      # QEMU vacío ⇒ HLDS nativo 32-bit sobre x86_64 (Render es x86_64).
+      - key: HLDS_BOT_QUOTA
+        value: "9"
+      # Empty QEMU means native 32-bit execution on Render's x86_64 hosts.
       - key: QEMU
         value: ""
+      # Render prompts for this during Blueprint apply. Enter the exact
+      # Cloudflare frontend origin, for example https://cs16-web.example.dev.
+      - key: BRIDGE_ALLOWED_ORIGINS
+        sync: false
+      # Render creates this secret. The server uses it for privileged RCON and
+      # local diagnostics can reuse it; it is never sent to the frontend or
+      # included in the /health response.
+      - key: HLDS_RCON_PASSWORD
+        generateValue: true

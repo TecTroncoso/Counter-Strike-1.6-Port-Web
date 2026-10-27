@@ -1,6 +1,8 @@
-# keep the Docker build context small: the image only needs these two trees
-# (see deploy/render/Dockerfile). Everything else is ignored.
+# Keep the Docker build context small. The pinned GoldSrc base image supplies
+# the ~1.4 GB compressed game content, so no HLDS tree is needed from Git.
 *
-!hlds-ns-root
-!mini-services
-!package.json
+!mini-services/
+!mini-services/**
+!deploy/
+!deploy/render/
+!deploy/render/entrypoint.sh

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Sube game-files/ (271 MB) a un bucket público de Cloudflare R2.
+# Sube game-files/ (284 MB) a un bucket público de Cloudflare R2.
 #
 # Estructura: el frontend pide  <NEXT_PUBLIC_ASSETS_BASE_URL>/assets/<ruta>,
 # así que el contenido de game-files/ se sube bajo el prefijo "assets/":

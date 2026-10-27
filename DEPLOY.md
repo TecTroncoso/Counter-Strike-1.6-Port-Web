@@ -3,7 +3,7 @@
 Guía completa para llevar el proyecto del sandbox a producción con el stack:
 
 ```
-Navegador ──HTTPS──▶ Cloudflare Workers (frontend OpenNext) + R2 (271 MB de assets)
+Navegador ──HTTPS──▶ Cloudflare Workers (frontend OpenNext + Static Assets)
     │
     └──WSS──▶ Render (Docker: puente Bun WebSocket⇄UDP + HLDS nativo 32-bit + bots YaPB)
                  └── UDP localhost:27015 ──▶ HLDS (de_dust2)
@@ -15,12 +15,25 @@ Coste recomendado: **$7/mes** (Render Starter, siempre encendido). También
 puede probarse con Render Free + un cron externo, pero el servicio se duerme
 tras 15 min sin tráfico y el primer juego necesita esperar al arranque.
 
+### Estado desplegado actual
+
+| Componente | URL pública | Estado |
+|---|---|---|
+| Frontend Next.js | <https://cs16-web.counterstrike.workers.dev> | Live en Cloudflare Workers |
+| Puente WSS + HLDS | <https://cs16-hlds-bridge.onrender.com> | Live en Render (`de_dust2`, 9 bots) |
+
+El servicio Render actual usa el plan temporal **Free** porque la cuenta todavía
+no tiene un método de pago. Para producción-resident se debe añadir la
+facturación y cambiar a **Starter**; Render devuelve `402 Payment Required`
+mientras no exista información de pago. Free sigue siendo válido para validar
+el flujo, pero puede dormirse tras 15 min sin tráfico.
+
 Por qué funciona este reparto:
 
 | Pieza | Dónde | Por qué ahí |
 |---|---|---|
 | Frontend Next.js | Cloudflare (OpenNext) | El launcher es client-side; Workers gratis sobra |
-| 271 MB de assets del juego | R2 público | La API route `/assets` lee del disco → no existe en Workers; R2 soporta Range y sin límite de 25 MB/archivo |
+| 284 MB de assets del juego | Cloudflare Static Assets (R2 opcional) | El conjunto actual son 42 archivos y el mayor está por debajo del límite de 25 MiB; R2 puede usarse después si se requieren descargas Range/resumibles |
 | Puente WS⇄UDP + HLDS | Render (Docker) | Proceso persistente; el navegador SOLO habla WSS con el puente — HLDS escucha UDP en localhost dentro del contenedor, así que Render no necesita UDP público |
 | Base de datos | Turso | Prisma + adapter libSQL (ya integrado en `src/lib/db.ts`) |
 
@@ -118,33 +131,25 @@ servidor real (RCON, MetaMod-P, ReGameDLL, YaPB, CORS, WebSocket y reinicio).
 
 ---
 
-## 3. Cloudflare — R2 (assets) + Workers (frontend)
+## 3. Cloudflare — Worker con OpenNext + Static Assets
 
-### 3a. R2: los 271 MB de archivos del juego
+### 3a. Assets del juego
+
+El build copia `game-files/` a `.open-next/assets/assets/`; así el Worker los
+publica en `/assets/...`. El conjunto actual contiene 42 archivos (unos 284 MB)
+y el mayor ocupa menos de 25 MiB, el límite por archivo de Cloudflare Static
+Assets. El launcher descarga cada parte de 8 MB por separado, por lo que no
+necesita respuestas HTTP Range.
+
+R2 es una opción futura si quieres descargas Range/resumibles o CDN propio:
 
 ```bash
 bun run deploy:r2                      # sube game-files/ → r2://cs16-assets/assets/…
 ```
 
-Luego en el dashboard de Cloudflare → **R2 → cs16-assets → Settings**:
-
-1. **Public access**: activa el endpoint `r2.dev` (solo para pruebas) o mejor
-   conecta un **dominio custom** (p. ej. `assets.tudominio.com`) — recomendado
-   para producción.
-2. **CORS policy** (Settings → CORS policy):
-
-```json
-[
-  {
-    "AllowedOrigins": ["*"],
-    "AllowedMethods": ["GET", "HEAD"],
-    "AllowedHeaders": ["range", "if-none-match"],
-    "MaxAgeSeconds": 86400
-  }
-]
-```
-
-3. Anota la URL pública → será `NEXT_PUBLIC_ASSETS_BASE_URL`.
+Luego configura el acceso público y CORS del bucket y usa su URL como
+`NEXT_PUBLIC_ASSETS_BASE_URL`. Mientras tanto, déjalo vacío para servir los
+assets desde el propio Worker.
 
 ### 3b. Workers: el frontend con OpenNext
 
@@ -152,20 +157,27 @@ Crea `.env` (o configura las variables en el dashboard al desplegar):
 
 ```bash
 NEXT_PUBLIC_CS16_BRIDGE_URL=wss://cs16-hlds-bridge.onrender.com
-NEXT_PUBLIC_ASSETS_BASE_URL=https://assets.tudominio.com
-TURSO_DATABASE_URL=libsql://cs16-tuusuario.turso.io
-TURSO_AUTH_TOKEN=eyJ...
+NEXT_PUBLIC_ASSETS_BASE_URL=
+```
+
+Los secretos de Turso se configuran aparte como secrets de runtime del Worker
+(no se incluyen en el bundle):
+
+```bash
+bunx wrangler secret put TURSO_DATABASE_URL
+bunx wrangler secret put TURSO_AUTH_TOKEN
 ```
 
 Despliega:
 
 ```bash
-bun run deploy:cf      # opennextjs-cloudflare build && deploy (usa wrangler.jsonc)
+bun run deploy:cf      # build sanitizado + auditoría de secretos + deploy
 ```
 
 > Las variables `NEXT_PUBLIC_*` se **inlinean en build time**: si las cambias,
-> redespliega. `TURSO_*` son runtime — también puedes setearlas con
-> `bunx wrangler secret put TURSO_AUTH_TOKEN` etc.
+> redespliega. `scripts/build-cloudflare.mjs` permite incluir únicamente esas
+> variables públicas en el artefacto y verifica que ningún secreto local haya
+> quedado embebido.
 
 Verifica: abre la URL del Worker (`https://cs16-web.<tu-subdomain>.workers.dev`),
 el menú debe mostrar el estado del servidor en verde (viene de
@@ -202,15 +214,13 @@ juego viven en la imagen y la configuración se regenera en cada arranque.
 # 1. Render vivo
 curl https://cs16-hlds-bridge.onrender.com/health
 
-# 2. Assets servidos por R2 con CORS y Range
-curl -sI https://assets.tudominio.com/assets/engine/xash.wasm \
-  -H "Origin: https://cs16-web.workers.dev" | grep -i "access-control\|content-type"
-curl -sI https://assets.tudominio.com/assets/engine/xash.wasm \
-  -H "Range: bytes=0-99" | grep -i "content-range"      # debe contestar 206
+# 2. Assets servidos por Cloudflare Static Assets
+curl -sI https://cs16-web.<subdomain>.workers.dev/assets/engine/xash.wasm \
+  | grep -i "content-type\|content-length"
 
 # 3. Frontend
 #    abre https://cs16-web.<subdomain>.workers.dev → Jugar →
-#    la barra debe llegar a 100% (descarga desde R2) y conectar al túnel WSS.
+#    la barra debe llegar a 100% y conectar al túnel WSS.
 ```
 
 ---
@@ -220,8 +230,8 @@ curl -sI https://assets.tudominio.com/assets/engine/xash.wasm \
 | Síntoma | Causa probable | Arreglo |
 |---|---|---|
 | El menú queda en "servidor desconectado" | `NEXT_PUBLIC_CS16_BRIDGE_URL` mal escrito o Render dormido | Verifica la URL en la consola del navegador (`/health` 404/net::ERR); despierta Render o revisa el deploy |
-| Descarga de assets al 0% con error CORS | Falta la CORS policy en el bucket R2 | Aplica el JSON del §3a y reintenta (Ctrl+F5) |
-| Descarga se corta y no reanuda | R2 sin soporte Range (raro) o proxy intermedio | Verifica el 206 del §5.2 |
+| Descarga de assets al 0% con error CORS | URL de assets mal configurada | Si `NEXT_PUBLIC_ASSETS_BASE_URL` está vacío, los assets salen del propio Worker; si no, revisa CORS y la URL del bucket |
+| Se necesita reanudar una descarga parcial | Static Assets sirve el archivo completo | Configura R2 y `NEXT_PUBLIC_ASSETS_BASE_URL`; el loader ya descarga partes independientes de 8 MB y verifica SHA-256 |
 | WSS no conecta, consola: "Mixed Content" | Frontend en HTTPS hablando `ws://` | Usa `wss://` en `NEXT_PUBLIC_CS16_BRIDGE_URL` |
 | `/health` responde `hlds:false` permanente | HLDS no arranca en el contenedor | Revisa los Logs de Render; confirma `QEMU` vacío, `HLDS_DIR=/app` y que el mapa exista en la imagen base |
 | El navegador recibe `403 Origin not allowed` | `BRIDGE_ALLOWED_ORIGINS` no coincide con el origen real | Configura el origen exacto del frontend (esquema + host + puerto, sin ruta) y redeploya |
@@ -255,4 +265,7 @@ curl -sI https://assets.tudominio.com/assets/engine/xash.wasm \
   `@prisma/adapter-libsql`; si no, SQLite local (sin cambios en el sandbox).
 - `deploy/render/` — Dockerfile + blueprint de Render (HLDS nativo).
 - `wrangler.jsonc` + `open-next.config.ts` — despliegue Cloudflare.
-- `scripts/upload_r2.sh` — subida de los 271 MB a R2 bajo `assets/`.
+- `scripts/build-cloudflare.mjs` — build OpenNext con allowlist pública y
+  auditoría de secretos; `scripts/prepare-cloudflare-assets.mjs` copia los
+  assets del juego a Worker Static Assets.
+- `scripts/upload_r2.sh` — subida opcional de los 284 MB a R2 bajo `assets/`.

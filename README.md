@@ -52,7 +52,9 @@ caddy run --config Caddyfile   # escucha :81 y enruta por XTransformPort
 Abre la app → escribe tu nick → **▶ JUGAR AHORA**. El mapa y la cantidad de bots
 son configuración del servidor, no controles del navegador.
 La primera carga descarga y verifica ~224 MB (queda cacheado por el navegador;
-las descargas son reanudables y cada parte lleva SHA-256).
+cada parte de 8 MB lleva SHA-256). Con assets servidos por Cloudflare Static
+Assets, Cloudflare sirve el archivo completo; R2 puede habilitarse para
+descargas parciales/resumibles mediante `NEXT_PUBLIC_ASSETS_BASE_URL`.
 
 ### Controles rápidos in-game
 

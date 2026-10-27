@@ -41,12 +41,13 @@ export function bridgeWsUrl(): string {
  * URL for big game assets (/assets/**).
  *
  * Same-origin deployments serve them from the app's own /assets route
- * (disk streaming). Split deployments (Cloudflare frontend) set
- * NEXT_PUBLIC_ASSETS_BASE_URL to a public Cloudflare R2 bucket URL
- * (custom domain or r2.dev endpoint) that mirrors game-files/, e.g.
+ * (disk streaming). The Cloudflare Worker deployment copies the same files
+ * into Worker Static Assets, so no external URL is required by default.
+ * Alternatively, set NEXT_PUBLIC_ASSETS_BASE_URL to a public R2 bucket
+ * (custom domain or r2.dev endpoint) to serve them from R2, e.g.
  *   NEXT_PUBLIC_ASSETS_BASE_URL=https://assets.example.com
- * R2 public endpoints natively support HTTP Range, so resumable downloads
- * keep working cross-origin (configure a permissive CORS policy on the bucket).
+ * R2 public endpoints natively support HTTP Range for resumable downloads
+ * (configure a CORS policy on the bucket).
  */
 export function assetUrl(pathWithLeadingSlash: string): string {
   const base = process.env.NEXT_PUBLIC_ASSETS_BASE_URL;

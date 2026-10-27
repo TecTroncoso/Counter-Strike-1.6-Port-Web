@@ -27,7 +27,7 @@ en un `<canvas>` con WebGL2.
 
 - **Bun** ≥ 1.1 (alternativa: Node 20+ con npm/pnpm)
 - Navegador con **WebGL2** (Chrome/Edge/Firefox recientes) — escritorio recomendado
-- Para el servidor dedicado: Linux x86_64 con `qemu-user-i386` (HLDS es 32-bit) y **SteamCMD**
+- Para el servidor dedicado: Linux x86_64 con librerías 32-bit (`libc6-i386` en Debian/Ubuntu). En hosts ARM hace falta `qemu-user-i386` y un sysroot i386.
 
 ## Puesta en marcha
 
@@ -49,7 +49,8 @@ bun run dev        # http://localhost:3000
 caddy run --config Caddyfile   # escucha :81 y enruta por XTransformPort
 ```
 
-Abre la app → escribe tu nick, elige mapa y nº de bots → **▶ JUGAR AHORA**.
+Abre la app → escribe tu nick → **▶ JUGAR AHORA**. El mapa y la cantidad de bots
+son configuración del servidor, no controles del navegador.
 La primera carga descarga y verifica ~224 MB (queda cacheado por el navegador;
 las descargas son reanudables y cada parte lleva SHA-256).
 
@@ -60,13 +61,18 @@ las descargas son reanudables y cada parte lleva SHA-256).
 
 ### Servidor dedicado HLDS + bots (multijugador)
 
-1. `python3 scripts/pull_hlds.py` — descarga HLDS 32-bit con SteamCMD, aplica
-   metamod + YaPB y deja el servidor listo en `hlds-ns-root/` (rcon: `csweb123`,
-   puerto 27015, `yb_quota` para bots).
-2. Arranca el HLDS (`hlds_run -game cstrike +maxplayers 32 +map de_dust2`).
+1. En producción, despliega `deploy/render/Dockerfile` mediante el Blueprint de
+   `deploy/render/render.yaml`; la imagen oficial incluye el HLDS, MetaMod-P,
+   ReGameDLL y YaPB.
+2. Para el sandbox legacy, `scripts/pull_hlds.py` extrae las capas de esa misma
+   imagen oficial en las rutas absolutas del entorno sandbox. No es el instalador
+   general de producción.
 3. El puente (`mini-services/cs16-server`) mapea cada WebSocket de navegador a un
    socket UDP propio contra `127.0.0.1:27015` — cada pestaña/dispositivo es un
    jugador independiente.
+4. El diagnóstico RCON local es opcional: configura el mismo
+   `HLDS_RCON_PASSWORD` en el `server.cfg` local y en el entorno, y ejecuta
+   `HLDS_RCON_PASSWORD='tu-secreto' python3 scripts/rcon.py "status"`.
 
 Sin HLDS también funciona el arranque, pero el cliente quedará en el menú: el
 multijugador requiere el servidor dedicado.

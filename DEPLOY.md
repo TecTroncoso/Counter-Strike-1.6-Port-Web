@@ -1,4 +1,4 @@
-# DEPLOY.md — Despliegue: Cloudflare + Render + Turso (+ cron-job.org)
+# DEPLOY.md — Despliegue: Cloudflare + Render + Turso
 
 Guía completa para llevar el proyecto del sandbox a producción con el stack:
 
@@ -9,11 +9,11 @@ Navegador ──HTTPS──▶ Cloudflare Workers (frontend OpenNext) + R2 (271 
                  └── UDP localhost:27015 ──▶ HLDS (de_dust2)
 
 Turso (libSQL) ◀── Prisma driver adapter ── Cloudflare Workers
-cron-job.org ── GET /health cada 10 min ──▶ Render (anti-sleep)
 ```
 
-Coste: **$0/mes** (Render free + cron-job.org) o **$7/mes** (Render Starter,
-siempre encendido y sin depender del cron).
+Coste recomendado: **$7/mes** (Render Starter, siempre encendido). También
+puede probarse con Render Free + un cron externo, pero el servicio se duerme
+tras 15 min sin tráfico y el primer juego necesita esperar al arranque.
 
 Por qué funciona este reparto:
 
@@ -37,8 +37,7 @@ turso auth login                                 # Turso (abre el navegador)
 ```
 
 Cuentas: [Cloudflare](https://dash.cloudflare.com) (gratis),
-[Render](https://dashboard.render.com) (gratis), [Turso](https://dashboard.turso.io) (gratis),
-[cron-job.org](https://cron-job.org) (gratis).
+[Render](https://dashboard.render.com), [Turso](https://dashboard.turso.io) (gratis).
 
 Sube el repo a GitHub (Render y Cloudflare despliegan desde Git; también
 puedes usar `wrangler deploy` directo).
@@ -67,13 +66,28 @@ Guarda `TURSO_DATABASE_URL` y `TURSO_AUTH_TOKEN` para el paso 3.
 
 ## 2. Render — puente WebSocket⇄UDP + HLDS
 
-La imagen Docker ya está preparada en `deploy/render/Dockerfile`: Debian + Bun +
-`libc6-i386`, con el servidor real (1.1 GB, `hlds-ns-root/`) incrustado. **En
-Render (x86_64) HLDS corre NATIVO, sin qemu** — el mismo `index.ts` detecta la
-arquitectura y elige el modo automáticamente.
+La imagen Docker de `deploy/render/Dockerfile` usa como base la imagen GoldSrc
+oficial fijada por digest (`lacledeslan/gamesvr-goldsource-cstrike`). La imagen
+final añade MetaMod-P, ReGameDLL_CS y YaPB desde releases inmutables, verifica
+sus SHA-256 y genera la configuración del servidor al arrancar. **En Render
+(x86_64) HLDS corre NATIVO, sin qemu**.
 
-**Opción A (Blueprint):** en Render → *New → Blueprint* → repo → detecta
-`deploy/render/render.yaml` → Apply.
+No hace falta subir `hlds-ns-root/` al repositorio ni usar Git LFS: el contexto
+de build solo contiene el puente y el entrypoint (`.dockerignore` excluye el
+resto). El servidor, sus mapas y las librerías 32-bit ya están en la imagen base.
+
+**Opción A (Blueprint, recomendada):** en Render → *New → Blueprint* → repo →
+selecciona `deploy/render/render.yaml` → *Apply*. El plan `starter` mantiene el
+servidor residente.
+
+Durante el Apply, configura lo siguiente:
+
+- `BRIDGE_ALLOWED_ORIGINS`: el origen exacto del frontend, separado por comas
+  si hay varios (por ejemplo `https://cs16-web.example.dev`). En producción el
+  puente rechaza cualquier origen que no esté en esta lista.
+- `HLDS_RCON_PASSWORD`: Render genera un secreto aleatorio. El servidor lo usa
+  para habilitar RCON y el diagnóstico local puede reutilizarlo; no se devuelve
+  en `/health` ni se envía al navegador.
 
 **Opción B (manual):** Render → *New → Web Service* → repo conectado:
 
@@ -83,10 +97,12 @@ arquitectura y elige el modo automáticamente.
 | Dockerfile path | `deploy/render/Dockerfile` |
 | Docker build context | `.` (raíz del repo) |
 | Health check path | `/health` |
-| Instance type | Free (ver §4) o Starter $7/mes |
+| Instance type | Starter (recomendado) |
 
-Env vars (ya vienen en el Dockerfile, puedes sobreescribirlas): `HLDS_DIR`,
-`HLDS_LOG_FILE`, `HLDS_MAP=de_dust2`, `HLDS_MAXPLAYERS=16`, `QEMU=` (vacío).
+Configura también `BRIDGE_ALLOWED_ORIGINS` y `HLDS_RCON_PASSWORD` como secretos.
+Las demás variables vienen en el Dockerfile y se pueden sobrescribir:
+`HLDS_DIR=/app`, `HLDS_GAME_DIR=/app/cstrike`, `HLDS_MAP=de_dust2`,
+`HLDS_MAXPLAYERS=16`, `HLDS_BOT_QUOTA=9` y `QEMU=` (vacío).
 
 Al terminar tendrás `https://cs16-hlds-bridge.onrender.com`. Verifica:
 
@@ -95,9 +111,10 @@ curl https://cs16-hlds-bridge.onrender.com/health
 # {"hlds":true,"starts":1,"uptimeSec":…,"clients":0,…}   ← hlds:true = HLDS vivo
 ```
 
-> **Atención al contexto de build:** la imagen incrusta `hlds-ns-root/`
-> (1.1 GB). El repo en GitHub debe contenerlo (usa Git LFS o un mirror privado;
-> con repo público de >100 MB GitHub se queja — LFS resuelve).
+Los logs del HLDS y del supervisor están en el dashboard de Render; no existe un
+endpoint HTTP público de logs. El repositorio incluye
+`.github/workflows/render-smoke.yml`, que construye la imagen y comprueba el
+servidor real (RCON, MetaMod-P, ReGameDLL, YaPB, CORS, WebSocket y reinicio).
 
 ---
 
@@ -159,34 +176,23 @@ el menú debe mostrar el estado del servidor en verde (viene de
 
 ---
 
-## 4. cron-job.org — que Render free no se duerma
+## 4. Plan gratuito — opcional
 
-Render free **duerme el servicio tras 15 min sin tráfico HTTP**. El primer
-jugador tras el sleep esperaría 1-2 min (boot del contenedor + HLDS + bots).
-Solución gratis: un cron que le pegue a `/health` cada 10 minutos.
+El Blueprint usa **Starter** porque un servidor multijugador debe permanecer
+residente y arrancar sin esperar una desconexión de inactividad. Si quieres
+probarlo sin pagar, puedes cambiar el plan a `free` en Render:
 
-1. Entra en [cron-job.org](https://cron-job.org) → *Cronjobs → Create cronjob*.
-2. Configura:
-   - **Title**: `CS16 keepalive`
-   - **URL**: `https://cs16-hlds-bridge.onrender.com/health`
-   - **Schedule**: Every 10 minutes
-   - **Advanced**: Request method `GET`, guarda el Response si quieres vigilar
-     que `hlds:true`.
-3. Actívalo y listo.
+- Render free **duerme el servicio tras 15 min sin tráfico HTTP**. El primer
+  jugador tras el sleep esperaría el arranque del contenedor, HLDS y bots.
+- Puedes usar [cron-job.org](https://cron-job.org) → *Cronjobs → Create cronjob*
+  con la URL `https://cs16-hlds-bridge.onrender.com/health`, método `GET` y
+  frecuencia de 10 minutos para reducir los sleeps.
+- El cron no evita reinicios por deploy/crash. El supervisor integrado vuelve a
+  arrancar HLDS y a restaurar la cuota de bots.
 
-Notas importantes:
-
-- Mientras alguien **juega**, la conexión WebSocket ya mantiene el servicio
-  despierto; el cron cubre los periodos sin jugadores.
-- El plan free de Render incluye **750 h/mes de instancia**: un servicio
-  siempre encendido consume ~744 h → **solo cabe un servicio free siempre
-  despierto**. Con el cron a 10 min + un solo servicio, estás dentro del
-  límite.
-- Si quieres cero dependencia del cron y arranque instantáneo: Render
-  **Starter ($7/mes)**.
-- El cron NO evita el reinicio del HLDS si Render reprograma el contenedor
-  (deploy/crash): el puente lo resucita solo (supervisor integrado), pero los
-  marcadores de los bots se reinician — igual que en el sandbox.
+Para producción se recomienda Starter: evita sleeps, reinicios programados y
+dependencias externas. No hace falta un disco persistente: los archivos del
+juego viven en la imagen y la configuración se regenera en cada arranque.
 
 ---
 
@@ -217,10 +223,11 @@ curl -sI https://assets.tudominio.com/assets/engine/xash.wasm \
 | Descarga de assets al 0% con error CORS | Falta la CORS policy en el bucket R2 | Aplica el JSON del §3a y reintenta (Ctrl+F5) |
 | Descarga se corta y no reanuda | R2 sin soporte Range (raro) o proxy intermedio | Verifica el 206 del §5.2 |
 | WSS no conecta, consola: "Mixed Content" | Frontend en HTTPS hablando `ws://` | Usa `wss://` en `NEXT_PUBLIC_CS16_BRIDGE_URL` |
-| `/health` responde `hlds:false` permanente | HLDS no arranca en el contenedor | `curl …/logs` y los Logs de Render; revisa que `QEMU` esté vacío y `HLDS_DIR` correcto |
-| "Setting up renderer…" en bucle | El túnel WS no transporta UDP (puente caído o URL incorrecta) | Mira `/logs` del puente; verifica `packetsIn` creciendo en `/health` |
+| `/health` responde `hlds:false` permanente | HLDS no arranca en el contenedor | Revisa los Logs de Render; confirma `QEMU` vacío, `HLDS_DIR=/app` y que el mapa exista en la imagen base |
+| El navegador recibe `403 Origin not allowed` | `BRIDGE_ALLOWED_ORIGINS` no coincide con el origen real | Configura el origen exacto del frontend (esquema + host + puerto, sin ruta) y redeploya |
+| El build falla al descargar un componente | Red o release no disponible | El Dockerfile reintenta las descargas y verifica SHA-256; revisa la URL del release en los logs |
+| "Setting up renderer…" en bucle | El túnel WS no transporta UDP (puente caído o URL incorrecta) | Revisa `packetsIn` en `/health` y los Logs de Render; no existe `/logs` público |
 | Turso: "no such table" | Esquema no aplicado | Repite el `prisma migrate diff | turso db shell` del §1 |
-| Render build falla por tamaño/lentitud | Contexto de build gigante | Mantén `.dockerignore` (excluye todo menos `hlds-ns-root` y `mini-services`) |
 | Workers: error 1101 al abrir | Falta `nodejs_compat` o binding de assets | Verifica `wrangler.jsonc` (§3b) |
 
 ---
@@ -229,8 +236,15 @@ curl -sI https://assets.tudominio.com/assets/engine/xash.wasm \
 
 - `mini-services/cs16-server/index.ts` — paths y modo de ejecución por env vars
   (`HLDS_DIR`, `QEMU`, `SYSROOT`, `HLDS_PORT`, `HLDS_LOG_FILE`, `HLDS_MAP`,
-  `HLDS_MAXPLAYERS`), auto-detección qemu (ARM) vs nativo (x86_64), y CORS en
-  `/health` + `/logs`.
+  `HLDS_MAXPLAYERS`, `HLDS_BOT_QUOTA`), supervisor con reintentos, CORS con
+  allow-list de origen y health sin secretos; ya no expone `/logs`.
+- `deploy/render/entrypoint.sh` — valida la configuración, genera `server.cfg`,
+  aplica el RCON secreto, fija `yb_quota` en MetaMod y en la config principal de
+  YaPB, y crea un ciclo de un solo mapa.
+- `deploy/render/Dockerfile` — base GoldSrc fijada por digest más MetaMod-P,
+  ReGameDLL y YaPB con releases/SHA-256 verificados.
+- `deploy/render/render.yaml` + `.github/workflows/render-smoke.yml` — Blueprint
+  con Starter, secretos gestionados por Render y prueba E2E del contenedor.
 - `src/lib/cs16/bridge.ts` (nuevo) — `bridgeHttpUrl` / `bridgeWsUrl` /
   `assetUrl`: honran `NEXT_PUBLIC_CS16_BRIDGE_URL` y
   `NEXT_PUBLIC_ASSETS_BASE_URL`; sin ellas el comportamiento es idéntico al

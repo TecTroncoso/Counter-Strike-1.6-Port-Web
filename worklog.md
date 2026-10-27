@@ -375,3 +375,35 @@ Work Log:
 Stage Summary:
 - Entorno operativo: https://preview-a26f232c-9b71-4098-abd6-9f954f2e0885.space-z.ai/
 - Respondida pregunta de despliegue: Vercel/CF solo frontend; puente+HLDS requieren VPS/Fly.io/Railway (contenedor con WSS público, UDP interno localhost)
+
+---
+
+Task ID: 11
+Agent: main (Cline)
+Task: Endurecer y validar el despliegue de Render para CS16 Web Port
+
+Work Log:
+- Sustituido el HLDS incrustado en el repositorio por la imagen oficial
+  `lacledeslan/gamesvr-goldsource-cstrike` fijada por digest. MetaMod-P,
+  ReGameDLL_CS y YaPB se instalan desde releases inmutables con SHA-256 verificado.
+- El entrypoint genera `server.cfg`, conserva un secreto RCON separado, valida
+  mapa/cuota/jugadores, fija `yb_quota` en MetaMod y en la config principal de
+  YaPB, y mantiene un ciclo de mapa consistente.
+- El puente deja de exponer `/logs`, valida la allow-list CORS en producción,
+  genera health sin secretos y sobrevive a fallos de spawn de HLDS.
+- El navegador ya no emite comandos RCON para cambiar mapa o bots; el servidor
+  es la única autoridad de esa configuración.
+- Blueprint Render actualizado al plan `starter`, con origen permitido y secreto
+  RCON gestionados por Render. Añadido smoke test E2E en GitHub Actions para
+  health/RCON/MetaMod/YaPB/CORS/WebSocket, health 503 y recuperación tras restart.
+- Validación local: schema oficial de Render, TypeScript estricto del puente,
+  ESLint, build Next.js, sintaxis y ShellCheck del entrypoint, prueba del
+  entrypoint contra un árbol HLDS simulado y checks de los tres archivos release.
+- Auditoría final: actionlint y ShellCheck con binarios verificados, secretos
+  base64 en CI, schema Draft 2020-12 oficial de Render, metadatos de las dos
+  imágenes base fijadas y build de producción Next.js tras los cambios de UI.
+
+Stage Summary:
+- despliegue reproducible y sin secretos ni un HLDS gigante en Git; smoke CI listo
+  para ejecutarse sobre Docker en GitHub Actions (Docker no está instalado en el
+  host Windows de esta sesión).

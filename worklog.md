@@ -402,6 +402,10 @@ Work Log:
 - Auditoría final: actionlint y ShellCheck con binarios verificados, secretos
   base64 en CI, schema Draft 2020-12 oficial de Render, metadatos de las dos
   imágenes base fijadas y build de producción Next.js tras los cambios de UI.
+- GitHub Actions run `40501826081` (sha `fb38688`) validó en Ubuntu/Docker la
+  imagen final: build, HLDS nativo, MetaMod-P/ReGameDLL/YaPB, health y RCON,
+  CORS/WebSocket, secreto no filtrado, `/logs` eliminado, 503 unhealthy y
+  recuperación tras reinicio; todos los pasos terminaron en verde.
 
 Stage Summary:
 - despliegue reproducible y sin secretos ni un HLDS gigante en Git; smoke CI listo

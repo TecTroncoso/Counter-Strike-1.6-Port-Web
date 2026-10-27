@@ -4,6 +4,7 @@ import net from "node:net";
 import { readFileSync } from "node:fs";
 
 const port = Number(process.env.PORT || 10000);
+const hldsPort = Number(process.env.HLDS_PORT || 27015);
 const expectedMap = process.env.HLDS_MAP || "de_dust2";
 const expectedBots = Number(process.env.HLDS_BOT_QUOTA || 9);
 const expectedMaxPlayers = Number(process.env.HLDS_MAXPLAYERS || 16);
@@ -39,6 +40,8 @@ async function rcon(command: string): Promise<string> {
         Buffer.from([0xff, 0xff, 0xff, 0xff]),
         Buffer.from("challenge rcon\n"),
       ]),
+      hldsPort,
+      "127.0.0.1",
     );
     const challengeResponse = await receive();
     const challenge = challengeResponse.trim().split(/\s+/).at(-1);
@@ -52,6 +55,8 @@ async function rcon(command: string): Promise<string> {
         Buffer.from([0xff, 0xff, 0xff, 0xff]),
         Buffer.from(`rcon ${challenge} ${password} ${command}\n`),
       ]),
+      hldsPort,
+      "127.0.0.1",
     );
     return await receive();
   } finally {

@@ -1,3 +1,4 @@
+/// <reference types="bun-types" />
 /**
  * CS16 Server Bridge — WebSocket ⇄ UDP proxy + HLDS supervisor.
  *
@@ -10,8 +11,9 @@
  *       an i386 sysroot — used on ARM hosts (the dev sandbox).
  * - Bridges every browser WebSocket connection (binary frames) to its own
  *   UDP socket against HLDS at 127.0.0.1:27015.
- * - Exposes /health and /logs for the web launcher (CORS enabled, so the
- *   frontend may live on another origin, e.g. Cloudflare Pages).
+ * - Exposes /health for the web launcher (CORS enabled, so the frontend may
+ *   live on another origin, e.g. Cloudflare Pages). Server logs remain in
+ *   the deployment platform's dashboard and are never exposed over HTTP.
  *
  * All paths are configurable via env so the same file runs in the sandbox,
  * in Docker and on a VPS unchanged.
@@ -20,7 +22,16 @@ import dgram from "node:dgram";
 import { appendFileSync, mkdirSync, existsSync } from "node:fs";
 import path from "node:path";
 
-const PORT = Number(process.env.PORT || 3010);
+function readIntegerEnv(name: string, fallback: number, min: number, max: number): number {
+  const raw = process.env[name];
+  const value = raw === undefined || raw === "" ? fallback : Number(raw);
+  if (!Number.isInteger(value) || value < min || value > max) {
+    throw new Error(`${name} must be an integer from ${min} to ${max}`);
+  }
+  return value;
+}
+
+const PORT = readIntegerEnv("PORT", 3010, 1, 65535);
 const HLDS_DIR = process.env.HLDS_DIR || "/home/z/my-project/hlds-ns-root/opt/steam/hlds";
 // Run-mode selection for the 32-bit HLDS binary:
 //   - QEMU env set to a path      → qemu-i386 user emulation with SYSROOT.
@@ -37,8 +48,34 @@ if (process.env.QEMU === undefined && !QEMU) {
   } catch {}
 }
 const SYSROOT = process.env.SYSROOT || "/home/z/my-project/compat/i386";
-const HLDS_PORT = Number(process.env.HLDS_PORT || 27015);
+const HLDS_PORT = readIntegerEnv("HLDS_PORT", 27015, 1, 65535);
+const HLDS_MAP = process.env.HLDS_MAP || "de_dust2";
+if (!/^[A-Za-z0-9_-]+$/.test(HLDS_MAP)) {
+  throw new Error("HLDS_MAP must contain only letters, digits, '_' or '-'");
+}
+const HLDS_MAXPLAYERS = readIntegerEnv("HLDS_MAXPLAYERS", 16, 1, 32);
+const HLDS_BOT_QUOTA = readIntegerEnv("HLDS_BOT_QUOTA", 9, 0, 32);
+if (HLDS_BOT_QUOTA > HLDS_MAXPLAYERS) {
+  throw new Error("HLDS_BOT_QUOTA cannot exceed HLDS_MAXPLAYERS");
+}
 const LOG_FILE = process.env.HLDS_LOG_FILE || "/home/z/my-project/hlds-logs/hlds-supervised.log";
+const ALLOWED_ORIGINS = new Set(
+  (process.env.BRIDGE_ALLOWED_ORIGINS || "")
+    .split(",")
+    .map((origin) => origin.trim().replace(/\/+$/, ""))
+    .filter(Boolean),
+);
+if (process.env.NODE_ENV === "production" && ALLOWED_ORIGINS.size === 0) {
+  throw new Error("BRIDGE_ALLOWED_ORIGINS must list at least one frontend origin in production");
+}
+
+function isAllowedOrigin(origin: string | null): boolean {
+  // Empty configuration keeps local/single-origin development working. In a
+  // split deployment BRIDGE_ALLOWED_ORIGINS must contain the frontend origin.
+  if (ALLOWED_ORIGINS.size === 0) return true;
+  if (!origin) return false;
+  return ALLOWED_ORIGINS.has(origin.replace(/\/+$/, ""));
+}
 
 try {
   mkdirSync(path.dirname(LOG_FILE), { recursive: true });
@@ -102,29 +139,46 @@ function spawnHlds(): void {
     "-console",
     "+sv_lan", "1",
     "+ip", "127.0.0.1",
-    "+map", process.env.HLDS_MAP || "de_dust2",
+    "+map", HLDS_MAP,
     "-port", String(HLDS_PORT),
-    "+maxplayers", process.env.HLDS_MAXPLAYERS || "16",
+    "+maxplayers", String(HLDS_MAXPLAYERS),
     "+exec", "server.cfg",
   ];
   const argv = QEMU ? [QEMU, "-L", SYSROOT, ...hldsArgs] : hldsArgs;
-  const child = Bun.spawn(argv, {
-    cwd: HLDS_DIR,
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "pipe",
-    env: { ...process.env, LD_LIBRARY_PATH: HLDS_DIR },
-  });
+  let child: ReturnType<typeof Bun.spawn>;
+  try {
+    child = Bun.spawn(argv, {
+      cwd: HLDS_DIR,
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, LD_LIBRARY_PATH: HLDS_DIR },
+    });
+  } catch (error) {
+    log("HLDS spawn failed", error);
+    hldsChild = null;
+    setTimeout(() => {
+      void ensureHlds(true);
+    }, 4000);
+    return;
+  }
   hldsChild = child;
 
   const appendLog = async (stream: ReadableStream<Uint8Array>) => {
     const decoder = new TextDecoder();
     let pending = "";
-    for await (const chunk of stream) {
+    for await (const chunk of stream as unknown as AsyncIterable<Uint8Array>) {
       pending += decoder.decode(chunk, { stream: true });
       const lines = pending.split("\n");
       pending = lines.pop() ?? "";
-      if (lines.length) appendFileSync(LOG_FILE, lines.join("\n") + "\n");
+      for (const line of lines) {
+        try {
+          appendFileSync(LOG_FILE, line + "\n");
+        } catch {}
+        // Render only exposes the container's stdout/stderr in its dashboard.
+        // Keep the local file too, but mirror HLDS output there for diagnosis.
+        console.log(`[hlds] ${line}`);
+      }
     }
   };
   void appendLog(child.stdout as ReadableStream<Uint8Array>);
@@ -178,11 +232,18 @@ async function main() {
     port: PORT,
     async fetch(req, server) {
       const url = new URL(req.url);
-      // CORS so a frontend on another origin (Cloudflare Pages) can poll /health.
+      const origin = req.headers.get("origin");
+      if (origin && !isAllowedOrigin(origin)) {
+        return new Response("Origin not allowed", { status: 403 });
+      }
+
+      // CORS so a frontend on another origin (Cloudflare Workers) can poll
+      // /health. Echo the validated origin instead of using a wildcard.
       const cors = {
-        "access-control-allow-origin": "*",
+        "access-control-allow-origin": origin || "*",
         "access-control-allow-methods": "GET, OPTIONS",
-        "access-control-allow-headers": "*",
+        "access-control-allow-headers": "content-type",
+        vary: "Origin",
       };
       if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
       if (url.pathname === "/health") {
@@ -195,23 +256,22 @@ async function main() {
             clients: wsToUdp.size,
             packetsIn,
             packetsOut,
+            map: HLDS_MAP,
+            bots: HLDS_BOT_QUOTA,
+            maxPlayers: HLDS_MAXPLAYERS,
           },
-          { headers: cors },
+          { status: alive ? 200 : 503, headers: cors },
         );
       }
-      if (url.pathname === "/logs") {
-        const f = Bun.file(LOG_FILE);
-        if (!(await f.exists())) return new Response("", { status: 200, headers: cors });
-        const text = await f.text();
-        const lines = text.split("\n").filter(Boolean);
-        return new Response(lines.slice(-60).join("\n"), {
-          headers: { "content-type": "text/plain; charset=utf-8", ...cors },
-        });
+      // Logs stay in the Render dashboard. Never expose HLDS output publicly.
+      if (url.pathname === "/logs") return new Response("Not found", { status: 404 });
+
+      // WebSocket upgrade for the game tunnel. Browsers always send Origin;
+      // reject an originless upgrade when an allow-list is configured.
+      if (ALLOWED_ORIGINS.size > 0 && !origin) {
+        return new Response("Origin required", { status: 403 });
       }
-      // WebSocket upgrade for the game tunnel
-      const upgraded = server.upgrade(req, {
-        data: { connectedAt: Date.now() },
-      });
+      const upgraded = server.upgrade(req);
       if (upgraded) return undefined;
       return new Response("CS16 bridge. Use WebSocket.", { status: 426 });
     },
